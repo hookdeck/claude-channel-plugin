@@ -1,7 +1,11 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+#!/usr/bin/env bun
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { HookdeckClient } from "@hookdeck/sdk";
-import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Configuration (environment variables)
@@ -28,40 +32,80 @@ function log(msg: string) {
 }
 
 // ---------------------------------------------------------------------------
-// MCP Server
+// MCP Server — uses low-level Server class per channels reference docs
 // ---------------------------------------------------------------------------
 
-const mcp = new McpServer(
-  { name: "hookdeck", version: "1.0.0" },
+const mcp = new Server(
+  { name: "hookdeck-channel", version: "1.0.0" },
   {
     capabilities: {
+      experimental: { "claude/channel": {} },
       tools: {},
-      "claude/channel": {},
-    } as any,
+    },
+    instructions: [
+      "Events from the hookdeck-channel arrive as <channel source=\"hookdeck-channel\" ...>.",
+      "Each event is a webhook forwarded from Hookdeck Event Gateway.",
+      "Attributes on the tag include: hookdeck_source (the Hookdeck source name),",
+      "event_type (e.g. push, invoice.paid, build.failed), and hookdeck_event_id.",
+      "Read the event payload and act on it. For example, investigate CI failures,",
+      "process payment webhooks, or respond to monitoring alerts.",
+      "To send an outbound HTTP request in response, use the hookdeck_reply tool.",
+    ].join(" "),
   }
 );
 
 // ---------------------------------------------------------------------------
-// Reply Tool (Phase 2 — two-way communication)
+// Reply Tool — lets Claude send outbound HTTP requests in response to events
 // ---------------------------------------------------------------------------
 
-mcp.tool(
-  "hookdeck_reply",
-  "Send an outbound webhook or HTTP request. Useful for replying to events — posting CI comments, acknowledging alerts, triggering downstream services, etc.",
-  {
-    destination_url: z.string().describe("URL to POST the response to"),
-    body: z.string().describe("JSON payload to send"),
-    headers: z
-      .string()
-      .describe('Optional HTTP headers as JSON object, e.g. {"Authorization": "Bearer ..."}. Omit or pass "{}" for no extra headers.'),
-  },
-  async ({ destination_url, body, headers: headersStr }) => {
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: "hookdeck_reply",
+      description:
+        "Send an outbound webhook or HTTP request. Useful for replying to events — posting CI comments, acknowledging alerts, triggering downstream services, etc.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          destination_url: {
+            type: "string",
+            description: "URL to POST the response to",
+          },
+          body: {
+            type: "string",
+            description: "JSON payload to send",
+          },
+          headers: {
+            type: "string",
+            description:
+              'Optional HTTP headers as JSON object, e.g. {"Authorization": "Bearer ..."}. Pass "{}" for no extra headers.',
+          },
+        },
+        required: ["destination_url", "body"],
+      },
+    },
+  ],
+}));
+
+mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+  if (req.params.name === "hookdeck_reply") {
+    const {
+      destination_url,
+      body,
+      headers: headersStr,
+    } = req.params.arguments as {
+      destination_url: string;
+      body: string;
+      headers?: string;
+    };
+
     let headers: Record<string, string> = {};
     try {
       headers = headersStr ? JSON.parse(headersStr) : {};
     } catch {
       // ignore parse errors, use empty headers
     }
+
     try {
       const response = await fetch(destination_url, {
         method: "POST",
@@ -85,10 +129,12 @@ mcp.tool(
       };
     }
   }
-);
+
+  throw new Error(`Unknown tool: ${req.params.name}`);
+});
 
 // ---------------------------------------------------------------------------
-// Channel notification helper
+// Channel notification helper — uses the official notification format
 // ---------------------------------------------------------------------------
 
 async function emitChannelEvent(opts: {
@@ -97,29 +143,25 @@ async function emitChannelEvent(opts: {
   eventId: string;
   payload: string;
 }) {
-  const attrs = [
-    `source="hookdeck"`,
-    `hookdeck_source="${opts.sourceName}"`,
-    `event_type="${opts.eventType}"`,
-    `hookdeck_event_id="${opts.eventId}"`,
-  ].join(" ");
-
-  // Use the low-level notification method on the underlying Server instance
-  // because notifications/claude/channel is not a standard MCP notification type
-  await (mcp as any).server.notification({
+  await mcp.notification({
     method: "notifications/claude/channel",
     params: {
-      channel: "hookdeck",
-      title: `Webhook from ${opts.sourceName}`,
-      body: `<channel ${attrs}>${opts.payload}</channel>`,
+      content: opts.payload,
+      meta: {
+        hookdeck_source: opts.sourceName,
+        event_type: opts.eventType,
+        hookdeck_event_id: opts.eventId,
+      },
     },
   });
 
-  log(`Emitted channel event: ${opts.sourceName} / ${opts.eventType} / ${opts.eventId}`);
+  log(
+    `Emitted channel event: ${opts.sourceName} / ${opts.eventType} / ${opts.eventId}`
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Sender gating — basic IP allowlist + Hookdeck header validation
+// Sender gating — basic IP allowlist
 // ---------------------------------------------------------------------------
 
 function isAllowed(req: Request, server: any): boolean {
@@ -152,7 +194,6 @@ function extractMetadata(req: Request): {
 } {
   const headers = req.headers;
 
-  // Hookdeck-specific headers
   const hookdeckSource =
     headers.get("x-hookdeck-source-name") ||
     headers.get("x-hookdeck-source-id") ||
@@ -162,10 +203,9 @@ function extractMetadata(req: Request): {
 
   // Try to determine event type from well-known webhook headers
   const eventType =
-    headers.get("x-github-event") || // GitHub
-    headers.get("x-gitlab-event") || // GitLab
-    headers.get("stripe-event-type") || // Stripe (custom, not standard)
-    headers.get("x-hookdeck-event-type") || // Hookdeck
+    headers.get("x-github-event") ||
+    headers.get("x-gitlab-event") ||
+    headers.get("x-hookdeck-event-type") ||
     "webhook";
 
   return {
@@ -176,20 +216,25 @@ function extractMetadata(req: Request): {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP Server — receives forwarded webhooks from Hookdeck CLI or direct delivery
+// HTTP Server — receives forwarded webhooks from Hookdeck CLI
 // ---------------------------------------------------------------------------
 
 function startHttpServer() {
   const server = Bun.serve({
     port: PORT,
+    hostname: "127.0.0.1",
     async fetch(req, server) {
       const url = new URL(req.url);
 
       // Health check
-      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
-        return new Response(JSON.stringify({ status: "ok", channel: "hookdeck" }), {
-          headers: { "Content-Type": "application/json" },
-        });
+      if (
+        req.method === "GET" &&
+        (url.pathname === "/" || url.pathname === "/health")
+      ) {
+        return new Response(
+          JSON.stringify({ status: "ok", channel: "hookdeck" }),
+          { headers: { "Content-Type": "application/json" } }
+        );
       }
 
       // Only accept POST for webhooks
@@ -212,18 +257,20 @@ function startHttpServer() {
         const meta = extractMetadata(req);
 
         // Event type filtering
-        if (EVENT_FILTER.length > 0 && !EVENT_FILTER.includes(meta.eventType)) {
+        if (
+          EVENT_FILTER.length > 0 &&
+          !EVENT_FILTER.includes(meta.eventType)
+        ) {
           log(`Filtered out event type: ${meta.eventType}`);
           return new Response(JSON.stringify({ status: "filtered" }), {
             headers: { "Content-Type": "application/json" },
           });
         }
 
-        // Try to pretty-format well-known payloads, fall back to raw
+        // Extract event type from JSON payload if not in headers
         let payload = body;
         try {
           const parsed = JSON.parse(body);
-          // For Stripe events, extract the type from the payload if not in headers
           if (parsed.type && meta.eventType === "webhook") {
             meta.eventType = parsed.type;
           }
@@ -239,16 +286,17 @@ function startHttpServer() {
           payload,
         });
 
-        return new Response(JSON.stringify({ status: "ok", eventId: meta.eventId }), {
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ status: "ok", eventId: meta.eventId }),
+          { headers: { "Content-Type": "application/json" } }
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log(`Error processing webhook: ${message}`);
-        return new Response(JSON.stringify({ status: "error", error: message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ status: "error", error: message }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
       }
     },
   });
@@ -265,7 +313,9 @@ function startHttpServer() {
 
 async function provisionHookdeckConnections() {
   if (!API_KEY) {
-    log("No HOOKDECK_API_KEY set — skipping SDK provisioning (Approach A: manual CLI mode)");
+    log(
+      "No HOOKDECK_API_KEY set — skipping SDK provisioning (Approach A: manual CLI mode)"
+    );
     log(`Run: hookdeck listen ${PORT} <source-name> in another terminal`);
     return;
   }

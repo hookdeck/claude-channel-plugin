@@ -1,6 +1,8 @@
 # Hookdeck Channel Plugin for Claude Code
 
-A Claude Code plugin that bridges webhooks from [Hookdeck Event Gateway](https://hookdeck.com) into Claude Code sessions as channel events. When webhooks arrive at your Hookdeck sources (from GitHub, Stripe, CI pipelines, monitoring tools, etc.), this plugin pushes them into Claude Code so Claude can react to them.
+A Claude Code channel plugin that bridges webhooks from [Hookdeck Event Gateway](https://hookdeck.com) into Claude Code sessions. When webhooks arrive at your Hookdeck sources (from GitHub, Stripe, CI pipelines, monitoring tools, etc.), this plugin pushes them into Claude Code as channel events so Claude can react to them automatically.
+
+Channels are in [research preview](https://code.claude.com/docs/en/channels#research-preview) and require Claude Code v2.1.80+.
 
 ## Architecture
 
@@ -19,7 +21,7 @@ Claude Code Session (reacts to events)
 ## Prerequisites
 
 - [Bun](https://bun.sh) runtime
-- [Claude Code](https://claude.ai) v2.1.80+
+- [Claude Code](https://claude.ai) v2.1.80+ with claude.ai login
 - [Hookdeck CLI](https://hookdeck.com/docs/cli) (for Approach A)
 - [Hookdeck API key](https://dashboard.hookdeck.com) (for Approach B)
 
@@ -34,18 +36,32 @@ Claude Code Session (reacts to events)
 ### For development
 
 ```bash
-claude --plugin-dir ./path/to/hookdeck-channel
+claude --plugin-dir ./path/to/claude-channel-plugin
 ```
 
-During research preview, custom channels also require:
+## Running with channels enabled
+
+Channels must be explicitly enabled per session with `--channels`:
 
 ```bash
-claude --dangerously-load-development-channels server:hookdeck
+claude --channels plugin:hookdeck@<marketplace-name>
+```
+
+During the research preview, custom channels aren't on the approved allowlist. To test locally:
+
+```bash
+claude --dangerously-load-development-channels plugin:hookdeck@<marketplace-name>
+```
+
+Or for a bare MCP server (no plugin wrapper):
+
+```bash
+claude --dangerously-load-development-channels server:hookdeck-channel
 ```
 
 ## Setup
 
-After installing the plugin, configure your webhook sources using one of two approaches.
+After installing and enabling the plugin, configure your webhook sources.
 
 ### Approach A: Manual (simpler)
 
@@ -59,7 +75,7 @@ Point your webhook provider at the Hookdeck source URL the CLI gives you.
 
 ### Approach B: Auto-provision (more integrated)
 
-Set `HOOKDECK_API_KEY` and `HOOKDECK_SOURCES` environment variables in your MCP server config. The plugin auto-creates Hookdeck connections and logs the source URLs on startup. You still need the Hookdeck CLI running to forward events locally:
+Set `HOOKDECK_API_KEY` and `HOOKDECK_SOURCES` environment variables in the plugin's `.mcp.json`. The plugin auto-creates Hookdeck connections and logs the source URLs on startup. You still need the Hookdeck CLI running to forward events locally:
 
 ```bash
 hookdeck listen 8788 --cli-path /webhook
@@ -67,7 +83,7 @@ hookdeck listen 8788 --cli-path /webhook
 
 ## Configuration
 
-All configuration is via environment variables set in the plugin's `.mcp.json`:
+All configuration is via environment variables in the plugin's `.mcp.json`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -75,7 +91,7 @@ All configuration is via environment variables set in the plugin's `.mcp.json`:
 | `HOOKDECK_API_KEY` | — | Hookdeck API key (enables auto-provisioning) |
 | `HOOKDECK_SOURCES` | — | Comma-separated source names to provision |
 | `HOOKDECK_EVENT_FILTER` | — | Comma-separated event types to allow (e.g., `push,pull_request`) |
-| `HOOKDECK_ALLOWED_IPS` | — | Comma-separated IPs to allow (empty = allow all) |
+| `HOOKDECK_ALLOWED_IPS` | — | Comma-separated IPs to allow (empty = allow all; localhost always allowed) |
 
 ## Testing Locally
 
@@ -97,21 +113,22 @@ curl -X POST http://localhost:8788/webhook \
 
 ## Reply Tool
 
-The plugin includes a `hookdeck_reply` tool that lets Claude send outbound HTTP requests in response to events — post PR comments, acknowledge alerts, trigger downstream services, etc.
+The plugin exposes a `hookdeck_reply` tool so Claude can send outbound HTTP requests in response to events — post PR comments, acknowledge alerts, trigger downstream services, etc.
 
 ## How It Works
 
 1. On session start, a hook installs dependencies into `${CLAUDE_PLUGIN_DATA}` if needed
-2. The plugin starts an HTTP server on `HOOKDECK_PORT` to receive forwarded webhooks
-3. It registers as an MCP server with the `claude/channel` capability
-4. When a POST arrives at `/webhook`, it extracts metadata (source name, event type, event ID) from Hookdeck headers and well-known webhook headers (GitHub, Stripe, GitLab, etc.)
-5. It emits a `notifications/claude/channel` notification with the payload wrapped in a `<channel>` XML tag
-6. Claude Code receives the notification and can react to the event
+2. The plugin starts a localhost HTTP server on `HOOKDECK_PORT` to receive forwarded webhooks
+3. It registers as an MCP server with the `claude/channel` capability (under `experimental`)
+4. Server `instructions` are added to Claude's system prompt so it knows how to handle events
+5. When a POST arrives at `/webhook`, it extracts metadata from Hookdeck headers and well-known webhook headers (GitHub, Stripe, GitLab)
+6. It emits a `notifications/claude/channel` notification with the payload as `content` and metadata as `meta` attributes
+7. Claude Code receives the event as a `<channel>` tag and acts on it
 
 ## Plugin Structure
 
 ```
-hookdeck-channel/
+claude-channel-plugin/
 ├── .claude-plugin/
 │   └── plugin.json         # Plugin manifest
 ├── .mcp.json                # MCP server config
