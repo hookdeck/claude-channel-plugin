@@ -1,8 +1,17 @@
 # Hookdeck Channel Plugin for Claude Code
 
-A Claude Code channel plugin that bridges webhooks from [Hookdeck Event Gateway](https://hookdeck.com) into Claude Code sessions. When webhooks arrive at your Hookdeck sources (from GitHub, Stripe, CI pipelines, monitoring tools, etc.), this plugin pushes them into Claude Code as channel events so Claude can react to them automatically.
+Receive webhooks from any provider (GitHub, Stripe, CI pipelines, monitoring tools) in your Claude Code session via [Hookdeck](https://hookdeck.com). Hookdeck captures, inspects, and forwards webhook events to Claude with stable URLs, event replay, and filtering — no tunnel setup required.
 
 Channels are in [research preview](https://code.claude.com/docs/en/channels#research-preview) and require Claude Code v2.1.80+.
+
+## Use-cases
+
+- **Iterate without re-triggering** — Capture a webhook once from your provider, then replay it every time you change your channel server code. No need to push another commit or create another test payment.
+- **Stable webhook URLs across restarts** — Your Hookdeck source URL stays the same between sessions. Reconfigure your webhook provider once and it keeps working no matter how many times you restart Claude Code or the CLI.
+- **Inspect what your channel actually receives** — See the full request body, headers, and response for every webhook in the CLI or Hookdeck dashboard. Useful when your channel notification formatting isn't producing what you expect.
+- **Filter out noise during development** — If you're subscribed to all GitHub events but only building a handler for push events, filter at the Hookdeck layer so your channel only receives what you're working on.
+- **Test multiple event types quickly** — Trigger one of each event type from your provider, then selectively replay them from Hookdeck's history as you build handlers for each one.
+- **Share webhook payloads with teammates** — Multiple developers can connect to the same Hookdeck source independently, each forwarding to their own local channel server without stepping on each other.
 
 ## Architecture
 
