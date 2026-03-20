@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "hookdeck-channel": {
+      "command": "bun",
+      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/index.ts"],
+      "env": {
+        "NODE_PATH": "${CLAUDE_PLUGIN_DATA}/node_modules",
+        "HOOKDECK_API_KEY": "",
+        "HOOKDECK_PORT": "8788",
+        "HOOKDECK_SOURCES": "",
+        "HOOKDECK_EVENT_FILTER": "",
+        "HOOKDECK_ALLOWED_IPS": ""
+      }
+    }
+  }
+}

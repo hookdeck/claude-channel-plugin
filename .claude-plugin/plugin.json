@@ -1,0 +1,11 @@
+{
+  "name": "hookdeck",
+  "version": "1.0.0",
+  "description": "Bridge webhooks from Hookdeck Event Gateway into Claude Code sessions as channel events. Receive GitHub, Stripe, CI, and monitoring webhooks — Claude reacts to them automatically.",
+  "author": {
+    "name": "Gareth Wilson"
+  },
+  "repository": "https://github.com/garethwilson/hookdeck-channel",
+  "license": "MIT",
+  "keywords": ["webhooks", "hookdeck", "channels", "events", "ci", "github", "stripe"]
+}
