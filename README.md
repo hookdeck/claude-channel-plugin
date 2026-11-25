@@ -39,7 +39,7 @@ Claude Code Session (reacts to events)
 ### From a marketplace
 
 ```
-/plugin install hookdeck@<marketplace-name>
+/plugin install hookdeck-channel@<marketplace-name>
 ```
 
 ### For development
@@ -53,13 +53,13 @@ claude --plugin-dir ./path/to/claude-channel-plugin
 Channels must be explicitly enabled per session with `--channels`:
 
 ```bash
-claude --channels plugin:hookdeck@<marketplace-name>
+claude --channels plugin:hookdeck-channel@<marketplace-name>
 ```
 
 During the research preview, custom channels aren't on the approved allowlist. To test locally:
 
 ```bash
-claude --dangerously-load-development-channels plugin:hookdeck@<marketplace-name>
+claude --dangerously-load-development-channels plugin:hookdeck-channel@<marketplace-name>
 ```
 
 Or for a bare MCP server (no plugin wrapper):
